@@ -8,7 +8,7 @@ from sklearn.cluster import KMeans
 import numpy as np
 import time
 
-output_file = "/data/ville_images.json"
+output_file = "/data/ville_metadata.json"
 
 def wait_for_rabbitmq(host="rabbitmq", retries=10, delay=5, username="user", password="password"):
     credentials = pika.PlainCredentials(username, password)
@@ -23,7 +23,8 @@ def wait_for_rabbitmq(host="rabbitmq", retries=10, delay=5, username="user", pas
 
 def get_dominant_colors(image_url, n_colors=3):
     try:
-        response = requests.get(image_url)
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; Processor/1.0; +https://example.com)"}
+        response = requests.get(image_url, headers=headers)
         response.raise_for_status()
         image = Image.open(BytesIO(response.content))
         image = image.resize((100, 100))  # Redimensionner pour accélérer KMeans
@@ -32,7 +33,10 @@ def get_dominant_colors(image_url, n_colors=3):
         kmeans = KMeans(n_clusters=n_colors, random_state=0)
         kmeans.fit(image_array)
         colors = kmeans.cluster_centers_.astype(int).tolist()
-        return colors
+
+        # Convertir les couleurs en format hexadécimal
+        hex_colors = ["#{:02x}{:02x}{:02x}".format(*color) for color in colors]
+        return hex_colors
     except Exception as e:
         print(f"[Processor] Erreur lors de l'analyse de l'image {image_url} : {e}")
         return []
@@ -45,10 +49,17 @@ def update_json_with_colors(ville, colors):
         else:
             data = []
 
+        # Mettre à jour ou ajouter les couleurs dominantes pour la ville
+        updated = False
         for item in data:
             if item["nom"] == ville["nom"] and item["pays"] == ville["pays"]:
                 item["couleurs_dominantes"] = colors
+                updated = True
                 break
+
+        if not updated:
+            ville["couleurs_dominantes"] = colors
+            data.append(ville)
 
         with open(output_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)

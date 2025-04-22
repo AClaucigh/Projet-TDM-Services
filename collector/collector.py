@@ -1,4 +1,3 @@
-# collector/collector.py
 import json
 import pika
 import time
@@ -6,7 +5,7 @@ from SPARQLWrapper import SPARQLWrapper, JSON
 
 print("[Collector] Démarrage du collecteur de données...")
 
-output_file = "/data/ville_images.json"
+output_file = "/data/ville_metadata.json"
 
 def wait_for_rabbitmq(host="rabbitmq", retries=10, delay=5, username="user", password="password"):
     credentials = pika.PlainCredentials(username, password)
@@ -22,12 +21,23 @@ def wait_for_rabbitmq(host="rabbitmq", retries=10, delay=5, username="user", pas
 def collect_data():
     sparql = SPARQLWrapper("https://query.wikidata.org/sparql")
     sparql.setQuery("""
-    SELECT ?ville ?villeLabel ?paysLabel ?image WHERE {
-      ?ville wdt:P31/wdt:P279* wd:Q515;
-             wdt:P17 ?pays;
-             wdt:P18 ?image.
-      SERVICE wikibase:label { bd:serviceParam wikibase:language "fr,en". }
-    } LIMIT 20
+    SELECT DISTINCT ?villeLabel ?image ?paysLabel ?population ?superficie ?coordonnees ?fuseauHoraireLabel WHERE { 
+      ?ville wdt:P31 wd:Q515;  # Sélectionne les villes
+             wdt:P18 ?image;  # Image de la ville
+             wdt:P17 ?pays;  # Pays de la ville
+             wdt:P1082 ?population;  # Population
+             wdt:P2046 ?superficie;  # Superficie
+             wdt:P625 ?coordonnees;  # Coordonnées GPS
+             wdt:P421 ?fuseauHoraire.  # Fuseau horaire
+
+      SERVICE wikibase:label { 
+        bd:serviceParam wikibase:language "fr". 
+        ?ville rdfs:label ?villeLabel.  
+        ?pays rdfs:label ?paysLabel.  
+        ?fuseauHoraire rdfs:label ?fuseauHoraireLabel.  
+      }
+    }
+    LIMIT 200
     """)
     sparql.setReturnFormat(JSON)
     results = sparql.query().convert()
@@ -36,7 +46,11 @@ def collect_data():
         ville = {
             "nom": result["villeLabel"]["value"],
             "pays": result["paysLabel"]["value"],
-            "image": result["image"]["value"]
+            "image": result["image"]["value"],
+            "population": int(result["population"]["value"]),
+            "superficie": float(result["superficie"]["value"]),
+            "coordonnees": result["coordonnees"]["value"],
+            "fuseau_horaire": result["fuseauHoraireLabel"]["value"]
         }
         villes.append(ville)
 

@@ -25,5 +25,10 @@ services:
     volumes:
       - shared_data:/data
 
+  recommender:
+    build: ./recommender
+    volumes:
+      - shared_data:/data
+
 volumes:
   shared_data:

@@ -1,11 +1,14 @@
 import json
+import os
 import pika
 import time
+import requests
 from SPARQLWrapper import SPARQLWrapper, JSON
 
 print("[Collector] Démarrage du collecteur de données...")
 
 output_file = "/data/ville_metadata.json"
+image_folder = "/data/images"
 
 def wait_for_rabbitmq(host="rabbitmq", retries=10, delay=5, username="user", password="password"):
     credentials = pika.PlainCredentials(username, password)
@@ -17,6 +20,26 @@ def wait_for_rabbitmq(host="rabbitmq", retries=10, delay=5, username="user", pas
             print(f"[Collector] Tentative {i+1}/{retries} : RabbitMQ pas encore prêt, on attend {delay}s...")
             time.sleep(delay)
     raise Exception("[Collector] Impossible de se connecter à RabbitMQ après plusieurs tentatives.")
+
+def download_image(image_url, folder=image_folder):
+    """Télécharge une image et la stocke localement."""
+    try:
+        os.makedirs(folder, exist_ok=True)
+        filename = os.path.join(folder, os.path.basename(image_url))
+        if not os.path.exists(filename):  # Éviter de retélécharger si l'image existe déjà
+            headers = {"User-Agent": "Mozilla/5.0 (compatible; Collector/1.0; +https://example.com)"}
+            response = requests.get(image_url, headers=headers, stream=True)
+            response.raise_for_status()
+            with open(filename, "wb") as f:
+                for chunk in response.iter_content(1024):
+                    f.write(chunk)
+            print(f"[Collector] Image téléchargée : {filename}")
+        else:
+            print(f"[Collector] Image déjà existante : {filename}")
+        return filename
+    except Exception as e:
+        print(f"[Collector] Erreur lors du téléchargement de l'image {image_url} : {e}")
+        return None
 
 def collect_data():
     sparql = SPARQLWrapper("https://query.wikidata.org/sparql")
@@ -40,6 +63,10 @@ def collect_data():
     LIMIT 200
     """)
     sparql.setReturnFormat(JSON)
+
+    # Ajouter un User-Agent personnalisé
+    sparql.addCustomHttpHeader("User-Agent", "MyCollector/1.0 (https://example.com; contact@example.com)")
+
     results = sparql.query().convert()
     villes = []
     for result in results["results"]["bindings"]:
@@ -52,6 +79,14 @@ def collect_data():
             "coordonnees": result["coordonnees"]["value"],
             "fuseau_horaire": result["fuseauHoraireLabel"]["value"]
         }
+
+        # Télécharger l'image et mettre à jour le chemin local
+        local_image_path = download_image(ville["image"])
+        if local_image_path:
+            ville["image"] = local_image_path
+        else:
+            print(f"[Collector] Image non disponible pour {ville['nom']} ({ville['pays']})")
+
         villes.append(ville)
 
     # Sauvegarde locale dans le volume partagé

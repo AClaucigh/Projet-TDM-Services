@@ -1,22 +1,15 @@
 import os
 import json
 import numpy as np
+import streamlit as st
 from sklearn.linear_model import Perceptron
 from sklearn.preprocessing import StandardScaler
-import tkinter as tk
-from tkinter import Label, Button, Entry, StringVar, Frame
-from PIL import Image, ImageTk
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from PIL import Image
 
 # Fichiers partagés
 METADATA_FILE = "/data/ville_metadata.json"
 USER_DATA_FILE = "/data/users.json"
 IMAGE_FOLDER = "/data/images"
-
-# Charger les images disponibles
-def load_images():
-    return [os.path.join(IMAGE_FOLDER, img) for img in os.listdir(IMAGE_FOLDER) if img.endswith((".jpg", ".png", ".jpeg"))]
 
 # Charger les données JSON
 def load_data(json_file):
@@ -41,6 +34,10 @@ def save_user_data(data):
 def extract_features(data):
     features, images_paths = [], []
     for entry in data:
+        if "couleurs_dominantes" not in entry:
+            print(f"[Recommender] Entrée ignorée, pas de couleurs dominantes : {entry['nom']} ({entry['pays']})")
+            continue
+
         couleurs_dominantes = [int(c[1:], 16) for c in entry["couleurs_dominantes"]]
         couleur_moyenne = np.mean(couleurs_dominantes)
         population = entry["population"]
@@ -58,150 +55,71 @@ def sort_images_by_preferences(user_colors, images_features, images_paths):
     sorted_indices = np.argsort(distances)
     return [images_paths[i] for i in sorted_indices]
 
-# Classe pour l'écran de connexion
-class LoginScreen:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Connexion / Inscription")
-        self.user_data = load_user_data()
-        self.username_var = StringVar()
-        self.color_var = StringVar()
+# Interface Streamlit
+def main():
+    st.title("Recommandation d'Images")
+    st.sidebar.title("Connexion / Inscription")
 
-        Label(root, text="Nom d'utilisateur:").pack()
-        Entry(root, textvariable=self.username_var).pack()
+    # Charger les données utilisateur
+    user_data = load_user_data()
 
-        Label(root, text="Couleurs préférées (ex: #ff0000, #00ff00):").pack()
-        Entry(root, textvariable=self.color_var).pack()
+    # Connexion / Inscription
+    username = st.sidebar.text_input("Nom d'utilisateur")
+    user_colors = st.sidebar.text_input("Couleurs préférées (ex: #ff0000, #00ff00)").split(",")
 
-        Button(root, text="Se connecter / S'inscrire", command=self.login).pack()
-
-    def login(self):
-        username = self.username_var.get()
-        colors = self.color_var.get().split(",")
-
+    if st.sidebar.button("Se connecter / S'inscrire"):
         if username:
-            if username not in self.user_data:
-                self.user_data[username] = {"colors": colors, "features": [], "labels": []}
-                save_user_data(self.user_data)
-            self.root.destroy()
-            main_app(username, self.user_data)
+            if username not in user_data:
+                user_data[username] = {"colors": user_colors, "features": [], "labels": []}
+                save_user_data(user_data)
+            st.session_state["username"] = username
+            st.session_state["user_colors"] = user_colors
+            st.success(f"Bienvenue, {username} !")
 
-# Classe principale pour la recommandation d'images
-class ImageRecommenderApp:
-    def __init__(self, root, username, user_data):
-        self.root = root
-        self.username = username
-        self.user_data = user_data
-        self.images = load_images()
-        self.current_index = 0
-        self.scaler = StandardScaler()
-        self.classifier = Perceptron(max_iter=1000, eta0=0.1, random_state=12)
-        self.accuracies = []
-        self.viewed_images = set()
+    # Vérifier si l'utilisateur est connecté
+    if "username" in st.session_state:
+        username = st.session_state["username"]
+        user_colors = st.session_state["user_colors"]
 
-        self.image_label = Label(root)
-        self.image_label.pack(side="left", padx=10)
-
-        frame = Frame(root)
-        frame.pack(side="left", padx=10)
-        self.like_button = Button(frame, text="👍 Like", command=self.like_image, width=15, height=2, bg="green")
-        self.like_button.pack(side="left", padx=10, pady=10)
-        self.dislike_button = Button(frame, text="👎 Dislike", command=self.dislike_image, width=15, height=2, bg="red")
-        self.dislike_button.pack(side="right", padx=10, pady=10)
-
-        self.fig, self.ax = plt.subplots(figsize=(5, 3))
-        self.ax.set_title('Précision du modèle')
-        self.ax.set_xlabel('Itérations')
-        self.ax.set_ylabel('Précision')
-        self.ax.set_ylim([0, 1])
-
-        self.canvas = FigureCanvasTkAgg(self.fig, master=root)
-        self.canvas.get_tk_widget().pack(side="right", padx=10)
-
-        self.train_initial_model()
-        self.load_next_image()
-
-    def train_initial_model(self):
-        data = load_data(METADATA_FILE)
-        X, images_paths = extract_features(data)
-        user_colors = self.user_data[self.username]["colors"]
-        self.images = sort_images_by_preferences(user_colors, X, images_paths)
-
-    def load_next_image(self):
-        while self.current_index < len(self.images) and self.current_index in self.viewed_images:
-            self.current_index += 1
-
-        if self.current_index < len(self.images):
-            img_path = self.images[self.current_index]
-            img = Image.open(img_path)
-            img = img.resize((500, 300), Image.LANCZOS)
-            self.photo = ImageTk.PhotoImage(img)
-            self.image_label.config(image=self.photo)
-        else:
-            print("Toutes les images ont été vues. Vous pouvez recommencer.")
-            self.current_index = 0
-            self.load_next_image()
-
-    def like_image(self):
-        self.save_preference(1)
-
-    def dislike_image(self):
-        self.save_preference(0)
-
-    def save_preference(self, label):
-        if self.current_index >= len(self.images):
-            print("Toutes les images ont été vues. Vous pouvez recommencer.")
+        # Charger les données des images
+        image_data = load_data(METADATA_FILE)
+        if not image_data:
+            st.error("Aucune donnée d'image disponible.")
             return
 
-        current_image_path = self.images[self.current_index]
-        image_data = load_data(METADATA_FILE)
-        current_image_data = None
-        for entry in image_data:
-            if entry["image"] == current_image_path:
-                current_image_data = entry
-                break
+        # Extraire les caractéristiques des images
+        X, images_paths = extract_features(image_data)
 
-        if current_image_data:
-            couleur_principale = current_image_data["couleurs_dominantes"]
-            population = current_image_data["population"]
-            superficie = current_image_data["superficie"]
-            self.user_data[self.username]["features"].append([population, superficie, np.mean([int(c[1:], 16) for c in couleur_principale])])
-            self.user_data[self.username]["labels"].append(label)
+        # Trier les images selon les préférences utilisateur
+        sorted_images = sort_images_by_preferences(user_colors, X, images_paths)
 
-        save_user_data(self.user_data)
-        self.viewed_images.add(self.current_index)
+        # Afficher les images triées
+        if "current_index" not in st.session_state:
+            st.session_state["current_index"] = 0
 
-        self.current_index += 1
-        if len(self.user_data[self.username]["features"]) >= 10:
-            self.train_model()
-        self.load_next_image()
+        if st.session_state["current_index"] < len(sorted_images):
+            current_image_path = sorted_images[st.session_state["current_index"]]
+            image = Image.open(current_image_path)
+            st.image(image, caption=f"Image {st.session_state['current_index'] + 1}/{len(sorted_images)}", use_column_width=True)
 
-    def train_model(self):
-        X_train = np.array(self.user_data[self.username]["features"])
-        y_train = np.array(self.user_data[self.username]["labels"])
-        X_train_std = self.scaler.fit_transform(X_train)
-        self.classifier.fit(X_train_std, y_train)
-        accuracy = self.classifier.score(X_train_std, y_train)
-        self.accuracies.append(accuracy)
-        self.ax.clear()
-        self.ax.plot(range(len(self.accuracies)), self.accuracies, color="blue", marker="o")
-        self.ax.set_title('Précision du modèle')
-        self.ax.set_xlabel('Itérations')
-        self.ax.set_ylabel('Précision')
-        self.ax.set_ylim([0, 1])
-        self.canvas.draw()
+            # Boutons Like / Dislike
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("👍 Like"):
+                    save_preference(user_data, username, X, images_paths, st.session_state["current_index"], 1)
+                    st.session_state["current_index"] += 1
+            with col2:
+                if st.button("👎 Dislike"):
+                    save_preference(user_data, username, X, images_paths, st.session_state["current_index"], 0)
+                    st.session_state["current_index"] += 1
+        else:
+            st.info("Toutes les images ont été vues. Vous pouvez recommencer.")
 
-# Fonction pour démarrer l'application
-def main_app(username, user_data):
-    root = tk.Tk()
-    app = ImageRecommenderApp(root, username, user_data)
-    root.mainloop()
-
-# Fonction pour démarrer l'écran de connexion
-def start_login_screen():
-    root = tk.Tk()
-    login_screen = LoginScreen(root)
-    root.mainloop()
+# Sauvegarder les préférences utilisateur
+def save_preference(user_data, username, X, images_paths, index, label):
+    user_data[username]["features"].append(X[index].tolist())
+    user_data[username]["labels"].append(label)
+    save_user_data(user_data)
 
 if __name__ == "__main__":
-    start_login_screen()
+    main()

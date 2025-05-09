@@ -1,8 +1,6 @@
 import json
 import os
 import pika
-import requests
-from io import BytesIO
 from PIL import Image
 from sklearn.cluster import KMeans
 import numpy as np
@@ -21,12 +19,10 @@ def wait_for_rabbitmq(host="rabbitmq", retries=10, delay=5, username="user", pas
             time.sleep(delay)
     raise Exception("[Processor] Impossible de se connecter à RabbitMQ après plusieurs tentatives.")
 
-def get_dominant_colors(image_url, n_colors=3):
+def get_dominant_colors(image_path, n_colors=3):
+    """Analyse une image locale et retourne les couleurs dominantes au format hexadécimal."""
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (compatible; Processor/1.0; +https://example.com)"}
-        response = requests.get(image_url, headers=headers)
-        response.raise_for_status()
-        image = Image.open(BytesIO(response.content))
+        image = Image.open(image_path)
         image = image.resize((100, 100))  # Redimensionner pour accélérer KMeans
         image_array = np.array(image).reshape(-1, 3)
 
@@ -38,10 +34,11 @@ def get_dominant_colors(image_url, n_colors=3):
         hex_colors = ["#{:02x}{:02x}{:02x}".format(*color) for color in colors]
         return hex_colors
     except Exception as e:
-        print(f"[Processor] Erreur lors de l'analyse de l'image {image_url} : {e}")
+        print(f"[Processor] Erreur lors de l'analyse de l'image {image_path} : {e}")
         return []
 
 def update_json_with_colors(ville, colors):
+    """Met à jour le fichier JSON avec les couleurs dominantes pour une ville donnée."""
     try:
         if os.path.exists(output_file):
             with open(output_file, "r", encoding="utf-8") as f:
@@ -68,6 +65,7 @@ def update_json_with_colors(ville, colors):
         print(f"[Processor] Erreur lors de la mise à jour du fichier JSON : {e}")
 
 def consume_queue():
+    """Consomme les messages de la file RabbitMQ et traite les images."""
     connection = wait_for_rabbitmq()
     channel = connection.channel()
     channel.queue_declare(queue="ville_queue", durable=True)
@@ -75,8 +73,15 @@ def consume_queue():
     def callback(ch, method, properties, body):
         ville = json.loads(body)
         print(f"[Processor] Reçu : {ville['nom']}")
-        colors = get_dominant_colors(ville["image"])
-        update_json_with_colors(ville, colors)
+
+        # Utiliser le chemin local de l'image pour analyser les couleurs
+        image_path = ville["image"]
+        if os.path.exists(image_path):
+            colors = get_dominant_colors(image_path)
+            update_json_with_colors(ville, colors)
+        else:
+            print(f"[Processor] Image introuvable : {image_path}")
+
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
     channel.basic_consume(queue="ville_queue", on_message_callback=callback)

@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   rabbitmq:
     image: rabbitmq:3-management
@@ -27,6 +25,8 @@ services:
 
   recommender:
     build: ./recommender
+    ports:
+      - "8501:8501"
     volumes:
       - shared_data:/data
 

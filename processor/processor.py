@@ -6,8 +6,6 @@ from sklearn.cluster import KMeans
 import numpy as np
 import time
 
-output_file = "/data/ville_metadata.json"
-
 def wait_for_rabbitmq(host="rabbitmq", retries=10, delay=5, username="user", password="password"):
     credentials = pika.PlainCredentials(username, password)
     parameters = pika.ConnectionParameters(host, credentials=credentials)
@@ -37,32 +35,28 @@ def get_dominant_colors(image_path, n_colors=3):
         print(f"[Processor] Erreur lors de l'analyse de l'image {image_path} : {e}")
         return []
 
-def update_json_with_colors(ville, colors):
-    """Met à jour le fichier JSON avec les couleurs dominantes pour une ville donnée."""
+def publish_to_queue(ville, colors):
+    """Publie les données enrichies dans une nouvelle file RabbitMQ."""
     try:
-        if os.path.exists(output_file):
-            with open(output_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        else:
-            data = []
+        connection = wait_for_rabbitmq()
+        channel = connection.channel()
+        channel.queue_declare(queue="processed_images_queue", durable=True)
 
-        # Mettre à jour ou ajouter les couleurs dominantes pour la ville
-        updated = False
-        for item in data:
-            if item["nom"] == ville["nom"] and item["pays"] == ville["pays"]:
-                item["couleurs_dominantes"] = colors
-                updated = True
-                break
+        # Ajouter les couleurs dominantes aux données de la ville
+        ville["couleurs_dominantes"] = colors
 
-        if not updated:
-            ville["couleurs_dominantes"] = colors
-            data.append(ville)
-
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-            print(f"[Processor] Fichier JSON mis à jour pour {ville['nom']}")
+        # Publier le message dans la file
+        message = json.dumps(ville)
+        channel.basic_publish(
+            exchange="",
+            routing_key="processed_images_queue",
+            body=message,
+            properties=pika.BasicProperties(delivery_mode=2)
+        )
+        print(f"[Processor] Données publiées dans la file : {ville['nom']}")
+        connection.close()
     except Exception as e:
-        print(f"[Processor] Erreur lors de la mise à jour du fichier JSON : {e}")
+        print(f"[Processor] Erreur lors de la publication dans RabbitMQ : {e}")
 
 def consume_queue():
     """Consomme les messages de la file RabbitMQ et traite les images."""
@@ -78,7 +72,7 @@ def consume_queue():
         image_path = ville["image"]
         if os.path.exists(image_path):
             colors = get_dominant_colors(image_path)
-            update_json_with_colors(ville, colors)
+            publish_to_queue(ville, colors)  # Publier les données enrichies
         else:
             print(f"[Processor] Image introuvable : {image_path}")
 

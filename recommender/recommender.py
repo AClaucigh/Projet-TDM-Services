@@ -1,26 +1,19 @@
-import os
 import json
+import pika
 import numpy as np
 import streamlit as st
 from sklearn.linear_model import Perceptron
 from sklearn.preprocessing import StandardScaler
 from PIL import Image
+import os
 
-# Fichiers partagés
-METADATA_FILE = "/data/ville_metadata.json"
 USER_DATA_FILE = "/data/users.json"
-IMAGE_FOLDER = "/data/images"
-
-# Charger les données JSON
-def load_data(json_file):
-    if not os.path.exists(json_file):
-        return []
-    with open(json_file, "r", encoding="utf-8") as file:
-        return json.load(file)
 
 # Charger les données utilisateur
 def load_user_data():
     if not os.path.exists(USER_DATA_FILE):
+        with open(USER_DATA_FILE, "w") as f:
+            json.dump({}, f)  # Crée un fichier JSON vide
         return {}
     with open(USER_DATA_FILE, "r") as f:
         return json.load(f)
@@ -30,23 +23,30 @@ def save_user_data(data):
     with open(USER_DATA_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-# Extraire les caractéristiques des images
-def extract_features(data):
-    features, images_paths = [], []
-    for entry in data:
-        if "couleurs_dominantes" not in entry:
-            print(f"[Recommender] Entrée ignorée, pas de couleurs dominantes : {entry['nom']} ({entry['pays']})")
-            continue
+# Consommer les messages de RabbitMQ
+def consume_queue():
+    connection = pika.BlockingConnection(
+        pika.ConnectionParameters(
+            host="rabbitmq",
+            credentials=pika.PlainCredentials("user", "password")
+        )
+    )
+    channel = connection.channel()
+    channel.queue_declare(queue="processed_images_queue", durable=True)
 
-        couleurs_dominantes = [int(c[1:], 16) for c in entry["couleurs_dominantes"]]
-        couleur_moyenne = np.mean(couleurs_dominantes)
-        population = entry["population"]
-        superficie = entry["superficie"]
+    images_data = []
 
-        features.append([population, superficie, couleur_moyenne])
-        images_paths.append(entry["image"])
+    while True:
+        method_frame, properties, body = channel.basic_get(queue="processed_images_queue", auto_ack=True)
+        if method_frame:
+            ville = json.loads(body)
+            print(f"[Recommender] Message consommé : {ville}")  # Ajoutez ce log
+            images_data.append(ville)
+        else:
+            break
 
-    return np.array(features), images_paths
+    connection.close()
+    return images_data
 
 # Trier les images selon les préférences utilisateur
 def sort_images_by_preferences(user_colors, images_features, images_paths):
@@ -81,17 +81,29 @@ def main():
         username = st.session_state["username"]
         user_colors = st.session_state["user_colors"]
 
-        # Charger les données des images
-        image_data = load_data(METADATA_FILE)
-        if not image_data:
+        # Charger les données des images depuis RabbitMQ
+        st.info("Chargement des données depuis RabbitMQ...")
+        images_data = consume_queue()
+
+        if not images_data:
             st.error("Aucune donnée d'image disponible.")
             return
 
         # Extraire les caractéristiques des images
-        X, images_paths = extract_features(image_data)
+        features, images_paths = [], []
+        for entry in images_data:
+            couleurs_dominantes = [int(c[1:], 16) for c in entry["couleurs_dominantes"]]
+            couleur_moyenne = np.mean(couleurs_dominantes)
+            population = entry["population"]
+            superficie = entry["superficie"]
+
+            features.append([population, superficie, couleur_moyenne])
+            images_paths.append(entry["image"])
+
+        features = np.array(features)
 
         # Trier les images selon les préférences utilisateur
-        sorted_images = sort_images_by_preferences(user_colors, X, images_paths)
+        sorted_images = sort_images_by_preferences(user_colors, features, images_paths)
 
         # Afficher les images triées
         if "current_index" not in st.session_state:
@@ -100,24 +112,24 @@ def main():
         if st.session_state["current_index"] < len(sorted_images):
             current_image_path = sorted_images[st.session_state["current_index"]]
             image = Image.open(current_image_path)
-            st.image(image, caption=f"Image {st.session_state['current_index'] + 1}/{len(sorted_images)}", use_column_width=True)
+            st.image(image, caption=f"Image {st.session_state['current_index'] + 1}/{len(sorted_images)}", use_container_width=True)
 
             # Boutons Like / Dislike
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("👍 Like"):
-                    save_preference(user_data, username, X, images_paths, st.session_state["current_index"], 1)
+                    save_preference(user_data, username, features, images_paths, st.session_state["current_index"], 1)
                     st.session_state["current_index"] += 1
             with col2:
                 if st.button("👎 Dislike"):
-                    save_preference(user_data, username, X, images_paths, st.session_state["current_index"], 0)
+                    save_preference(user_data, username, features, images_paths, st.session_state["current_index"], 0)
                     st.session_state["current_index"] += 1
         else:
             st.info("Toutes les images ont été vues. Vous pouvez recommencer.")
 
 # Sauvegarder les préférences utilisateur
-def save_preference(user_data, username, X, images_paths, index, label):
-    user_data[username]["features"].append(X[index].tolist())
+def save_preference(user_data, username, features, images_paths, index, label):
+    user_data[username]["features"].append(features[index].tolist())
     user_data[username]["labels"].append(label)
     save_user_data(user_data)
 

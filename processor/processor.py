@@ -35,28 +35,28 @@ def get_dominant_colors(image_path, n_colors=3):
         print(f"[Processor] Erreur lors de l'analyse de l'image {image_path} : {e}")
         return []
 
+processed_images = set()
+
 def publish_to_queue(ville, colors):
-    """Publie les données enrichies dans une nouvelle file RabbitMQ."""
-    try:
-        connection = wait_for_rabbitmq()
-        channel = connection.channel()
-        channel.queue_declare(queue="processed_images_queue", durable=True)
+    if ville["image"] not in processed_images:
+        try:
+            connection = wait_for_rabbitmq()
+            channel = connection.channel()
+            channel.queue_declare(queue="processed_images_queue", durable=True)
 
-        # Ajouter les couleurs dominantes aux données de la ville
-        ville["couleurs_dominantes"] = colors
-
-        # Publier le message dans la file
-        message = json.dumps(ville)
-        channel.basic_publish(
-            exchange="",
-            routing_key="processed_images_queue",
-            body=message,
-            properties=pika.BasicProperties(delivery_mode=2)
-        )
-        print(f"[Processor] Données publiées dans la file : {ville['nom']}")
-        connection.close()
-    except Exception as e:
-        print(f"[Processor] Erreur lors de la publication dans RabbitMQ : {e}")
+            ville["couleurs_dominantes"] = colors
+            message = json.dumps(ville)
+            channel.basic_publish(
+                exchange="",
+                routing_key="processed_images_queue",
+                body=message,
+                properties=pika.BasicProperties(delivery_mode=2)
+            )
+            processed_images.add(ville["image"])
+            print(f"[Processor] Données publiées dans la file : {ville['nom']}")
+            connection.close()
+        except Exception as e:
+            print(f"[Processor] Erreur lors de la publication dans RabbitMQ : {e}")
 
 def consume_queue():
     """Consomme les messages de la file RabbitMQ et traite les images."""

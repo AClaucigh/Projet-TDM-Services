@@ -40,7 +40,7 @@ def consume_queue():
         method_frame, properties, body = channel.basic_get(queue="processed_images_queue", auto_ack=True)
         if method_frame:
             ville = json.loads(body)
-            print(f"[Recommender] Message consommé : {ville}")  # Ajoutez ce log
+            # print(f"[Recommender] Message consommé : {ville}")  # Ajouter ce log au besoin 
             images_data.append(ville)
         else:
             break
@@ -81,9 +81,12 @@ def main():
         username = st.session_state["username"]
         user_colors = st.session_state["user_colors"]
 
-        # Charger les données des images depuis RabbitMQ
-        st.info("Chargement des données depuis RabbitMQ...")
-        images_data = consume_queue()
+        # Charger les données des images depuis RabbitMQ une seule fois
+        if "images_data" not in st.session_state:
+            st.info("Chargement des données depuis RabbitMQ...")
+            st.session_state["images_data"] = consume_queue()
+
+        images_data = st.session_state["images_data"]
 
         if not images_data:
             st.error("Aucune donnée d'image disponible.")

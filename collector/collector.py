@@ -96,20 +96,24 @@ def collect_data():
 
     return villes
 
+published_images = set()
+
 def send_to_queue(villes):
     connection = wait_for_rabbitmq()
     channel = connection.channel()
     channel.queue_declare(queue="ville_queue", durable=True)
 
     for ville in villes:
-        message = json.dumps(ville)
-        channel.basic_publish(
-            exchange="",
-            routing_key="ville_queue",
-            body=message,
-            properties=pika.BasicProperties(delivery_mode=2)
-        )
-        print(f"[Collector] Envoyé : {ville['nom']}")
+        if ville["image"] not in published_images:
+            message = json.dumps(ville)
+            channel.basic_publish(
+                exchange="",
+                routing_key="ville_queue",
+                body=message,
+                properties=pika.BasicProperties(delivery_mode=2)
+            )
+            published_images.add(ville["image"])
+            print(f"[Collector] Envoyé : {ville['nom']}")
     connection.close()
 
 if __name__ == "__main__":
